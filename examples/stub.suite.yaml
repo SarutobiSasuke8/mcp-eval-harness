@@ -1,0 +1,63 @@
+# Suite for the in-repo stub MCP. Fixture paths resolve relative to this file.
+# Run from the repo root after `npm run build`:
+#   node dist/src/cli.js examples/stub.suite.yaml
+version: 1
+name: stub-mcp
+target:
+  transport: stdio
+  command: ["node", "../dist/examples/stub-mcp/server.js"]
+contracts:
+  - name: tools_listed
+    expect_tools: [search_jobs, get_listing]
+
+  - name: search_jobs_input_schema
+    input_schema:
+      search_jobs: ../fixtures/stub/search_jobs.input.schema.json
+
+  - name: search_jobs_schema_and_golden
+    tool: search_jobs
+    input: { query: "nurse dublin", limit: 5 }
+    assert:
+      result_schema: ../fixtures/stub/search_jobs.result.schema.json
+      golden:
+        path: ../fixtures/stub/search_jobs.golden.json
+        ignore_paths: [generated_at]
+
+  - name: search_jobs_golden_subset
+    tool: search_jobs
+    input: { query: "typescript", limit: 10 }
+    assert:
+      golden:
+        path: ../fixtures/stub/search_jobs.subset.golden.json
+        only_paths: [total, "jobs[].id", "jobs[].title"]
+
+  - name: get_listing_golden
+    tool: get_listing
+    input: { id: job-004 }
+    assert:
+      golden: ../fixtures/stub/get_listing.golden.json
+
+  # SDK 2.x surfaces input validation failures as a tool result with isError: true,
+  # so the deny path is asserted on the result, not on a JSON-RPC error code.
+  - name: deny_over_limit
+    tool: search_jobs
+    input: { query: "x", limit: 9999 }
+    assert:
+      is_error: true
+      error_message: "limit.*(100|Too big)"
+
+  - name: unknown_listing_is_error
+    tool: get_listing
+    input: { id: job-999 }
+    assert:
+      is_error: true
+      error_message: "Listing not found: job-999"
+
+  # Protocol-level failures do arrive as JSON-RPC errors. Calling an unregistered tool is
+  # the SDK INVALID_PARAMS path and proves error_code assertions end to end.
+  - name: unknown_tool_is_invalid_params
+    tool: not_a_tool
+    input: {}
+    assert:
+      error_code: INVALID_PARAMS
+      error_message: "not found"
