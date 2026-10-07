@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "authentication": "optional",
+      "id": "himalayas"
+    },
+    {
+      "authentication": "none",
+      "id": "jobspy"
+    },
+    {
+      "authentication": "none",
+      "id": "weworkremotely"
+    },
+    {
+      "authentication": "none",
+      "id": "remoteok"
+    },
+    {
+      "authentication": "none",
+      "id": "lennysjobs"
+    }
+  ]
+}
