@@ -1,0 +1,51 @@
+{
+  "jobs": [
+    {
+      "company": "Beaumont Hospital",
+      "id": "job-001",
+      "location": "Dublin",
+      "remote": false,
+      "tags": [
+        "nursing",
+        "healthcare"
+      ],
+      "title": "Staff Nurse"
+    },
+    {
+      "company": "Grafton Street Clinic",
+      "id": "job-002",
+      "location": "Dublin",
+      "remote": false,
+      "tags": [
+        "nursing",
+        "primary-care"
+      ],
+      "title": "Practice Nurse"
+    },
+    {
+      "company": "Trinity College Dublin",
+      "id": "job-003",
+      "location": "Dublin",
+      "remote": true,
+      "tags": [
+        "nursing",
+        "education"
+      ],
+      "title": "Nurse Educator"
+    },
+    {
+      "company": "Children's Health Ireland",
+      "id": "job-005",
+      "location": "Dublin",
+      "remote": false,
+      "tags": [
+        "nursing",
+        "paediatrics"
+      ],
+      "title": "Paediatric Nurse"
+    }
+  ],
+  "limit": 5,
+  "query": "nurse dublin",
+  "total": 4
+}

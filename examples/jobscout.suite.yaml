@@ -1,0 +1,70 @@
+# How JobScout plugs in. This suite lives here as an example; the real one belongs in the
+# jobscout-mcp repo as `eval/jobscout.suite.yaml` with `command: ["node", "dist/src/stdio.js"]`.
+#
+# From a sibling checkout (this repo and jobscout-mcp side by side, jobscout built):
+#   node dist/src/cli.js examples/jobscout.suite.yaml
+#
+# Only deterministic, network-free tools carry goldens. jobscout_search_jobs contacts live job
+# boards, so it is covered by schema and error-path checks, never by a golden.
+version: 1
+name: jobscout-mcp
+target:
+  transport: stdio
+  command: ["node", "../../jobscout-mcp/dist/src/stdio.js"]
+contracts:
+  - name: tools_listed
+    expect_tools:
+      - jobscout_list_sources
+      - jobscout_search_jobs
+      - jobscout_classify_jobs
+      - jobscout_deduplicate
+      - jobscout_source_yield
+      - jobscout_briefing
+      - jobscout_setup
+      - jobscout_find_jobs
+
+  - name: search_jobs_input_schema
+    input_schema:
+      jobscout_search_jobs: ../fixtures/jobscout/search_jobs.input.schema.json
+
+  - name: classify_jobs_golden
+    tool: jobscout_classify_jobs
+    input:
+      jobs:
+        - title: "Senior Solidity Engineer"
+          company: "Example Labs"
+          location: "Remote"
+          description: "Build smart contracts on EVM chains. Experience with LLM agents is a plus."
+          tags: ["web3", "ai"]
+        - title: "Staff Nurse"
+          company: "Example Hospital"
+          location: "Dublin"
+          description: "Ward-based nursing role."
+          tags: []
+    assert:
+      result_schema: ../fixtures/jobscout/classify_jobs.result.schema.json
+      golden: ../fixtures/jobscout/classify_jobs.golden.json
+
+  # list_sources depends on which API keys are present in the environment, so only the
+  # stable shape is compared: provider ids and auth boundaries, never enabled state.
+  - name: list_sources_shape
+    tool: jobscout_list_sources
+    input: {}
+    assert:
+      golden:
+        path: ../fixtures/jobscout/list_sources.golden.json
+        only_paths: ["sources[].id", "sources[].authentication"]
+
+  # Over-limit requests are rejected by the input schema and surface as isError: true.
+  - name: deny_over_limit
+    tool: jobscout_search_jobs
+    input: { query: "nurse dublin", limit: 9999 }
+    assert:
+      is_error: true
+      error_message: "limit"
+
+  - name: unknown_tool_is_invalid_params
+    tool: jobscout_not_a_tool
+    input: {}
+    assert:
+      error_code: INVALID_PARAMS

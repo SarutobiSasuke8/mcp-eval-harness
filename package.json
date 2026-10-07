@@ -1,0 +1,62 @@
+{
+  "name": "@sarutobi-sasuke/mcp-eval-harness",
+  "version": "0.1.0",
+  "description": "Shared evaluation harness for product MCPs: deterministic contract tests, golden fixtures and a CLI with CI exit codes.",
+  "license": "MIT",
+  "author": "Alexei Udall",
+  "homepage": "https://github.com/SarutobiSasuke8/mcp-eval-harness#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SarutobiSasuke8/mcp-eval-harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SarutobiSasuke8/mcp-eval-harness/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mcp-eval": "dist/src/cli.js"
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && node --test \"dist/tests/*.test.js\"",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "eval:stub": "npm run build && node dist/src/cli.js examples/stub.suite.yaml"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "testing",
+    "contract-tests",
+    "golden-fixtures",
+    "ci"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/server": "2.2.0",
+    "ajv": "8.20.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/node": "22.19.15",
+    "eslint": "10.8.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0"
+  }
+}

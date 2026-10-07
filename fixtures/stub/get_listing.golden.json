@@ -1,0 +1,11 @@
+{
+  "company": "Astraeus Business Solutions",
+  "id": "job-004",
+  "location": "Remote",
+  "remote": true,
+  "tags": [
+    "typescript",
+    "node"
+  ],
+  "title": "Senior TypeScript Engineer"
+}
