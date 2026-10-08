@@ -169,7 +169,9 @@ which records:
 }
 ```
 
-Always pin a full 40-character commit SHA, never a branch. The package has a `prepare` script, so npm builds `dist/src` on install and the `mcp-eval` bin works straight away. Why `prepare` rather than a committed `dist/`: no generated code in git, no risk of `dist/` drifting from `src/`, and npm runs it for every git install. The cost is that a git install also installs the harness's dev dependencies (TypeScript) once, to build; that takes a few seconds and is cached.
+Always pin a full 40-character commit SHA, never a branch. The package has a `prepare` script, so npm builds `dist/src` on install and the `mcp-eval` bin works straight away. Why `prepare` rather than a committed `dist/`: no generated code in git, no risk of `dist/` drifting from `src/`, and npm runs it for every git install. The cost is that a git install also installs the harness's dev dependencies (TypeScript) once, to build; that takes a few seconds and is cached. Only the five runtime dependencies end up in your `node_modules`.
+
+npm 11 prints an `install-scripts` warning naming this package's `prepare` script ("not yet covered by allowScripts"). On npm 11.19.0 the build still runs and `mcp-eval` works; the warning is informational. npm's own suggestion, `npm install-scripts approve @sarutobi-sasuke/mcp-eval-harness`, records the approval if you want it gone. npm 10 (bundled with Node 22) does not print it.
 
 ### 2. Layout
 
