@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-import { formatHuman, formatJson } from "./report.js";
+import { formatHuman, formatJson, formatMarkdown, formatMarkdownError } from "./report.js";
 import { runSuite } from "./runner.js";
 import { loadSuite } from "./suite.js";
 
@@ -22,18 +24,23 @@ Options:
   --json             Print the full report as JSON instead of the human summary
   --update-goldens   Rewrite golden fixtures from the current results (explicit opt-in)
   --base-dir <dir>   Resolve fixture paths against this directory (default: suite file's directory)
+  --report <file>    Also write the full JSON report to this file
+  --summary <file>   Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
   -h, --help         Show this help
 
 Exit codes:
   0  every contract passed
   1  at least one contract failed
-  2  usage or configuration error (bad suite, unreachable target)
+  2  usage or configuration error (bad suite, unreachable or refused target,
+     connection timeout, HTTP 401 or other transport failure while connecting)
 `;
 
 const CLI_OPTIONS = {
   json: { type: "boolean", default: false },
   "update-goldens": { type: "boolean", default: false },
   "base-dir": { type: "string" },
+  report: { type: "string" },
+  summary: { type: "string" },
   help: { type: "boolean", short: "h", default: false },
 } as const;
 
@@ -63,12 +70,28 @@ export async function main(argv: string[]): Promise<number> {
       ...(parsed.values["base-dir"] ? { baseDir: parsed.values["base-dir"] } : {}),
     });
   } catch (error) {
-    process.stderr.write(`mcp-eval: ${error instanceof Error ? error.message : String(error)}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`mcp-eval: ${message}\n`);
+    if (parsed.values.summary) {
+      await writeOutput(parsed.values.summary, formatMarkdownError(suitePath, message), "append");
+    }
     return EXIT_USAGE;
   }
 
   process.stdout.write(`${parsed.values.json ? formatJson(report) : formatHuman(report)}\n`);
+  if (parsed.values.report) {
+    await writeOutput(parsed.values.report, `${formatJson(report)}\n`, "write");
+  }
+  if (parsed.values.summary) {
+    await writeOutput(parsed.values.summary, formatMarkdown(report), "append");
+  }
   return report.passed ? EXIT_PASS : EXIT_FAIL;
+}
+
+async function writeOutput(path: string, content: string, mode: "write" | "append"): Promise<void> {
+  const file = resolve(path);
+  await mkdir(dirname(file), { recursive: true });
+  await (mode === "append" ? appendFile(file, content, "utf8") : writeFile(file, content, "utf8"));
 }
 
 function isEntrypoint(): boolean {

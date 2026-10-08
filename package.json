@@ -31,11 +31,14 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:package": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build:package",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "check": "npm run typecheck && npm run lint && npm test",
-    "eval:stub": "npm run build && node dist/src/cli.js examples/stub.suite.yaml"
+    "eval:stub": "npm run build && node dist/src/cli.js examples/stub.suite.yaml",
+    "action:local": "npm run build && node scripts/exercise-action.mjs"
   },
   "keywords": [
     "mcp",

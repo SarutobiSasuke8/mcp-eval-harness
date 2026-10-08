@@ -1,0 +1,78 @@
+name: mcp-eval
+description: Run an mcp-eval contract suite against an MCP server, write a job summary and fail the job on any contract failure.
+author: Alexei Udall
+
+# Composite action. It checks out nothing itself: the calling workflow checks out its own repo
+# and builds its MCP server first, then calls this action with the suite path.
+#
+# Exit codes from mcp-eval are passed through: 0 every contract passed, 1 at least one contract
+# failed, 2 usage, configuration or target error. Any non-zero exit fails the step.
+
+inputs:
+  suite:
+    description: Path to the suite file (YAML or JSON), relative to working-directory.
+    required: true
+  working-directory:
+    description: Directory mcp-eval runs in. Relative paths in the suite resolve from the suite file, not from here.
+    required: false
+    default: "."
+  node-version:
+    description: Node.js version for actions/setup-node. Set to an empty string to skip setup-node and use the Node already on the runner (20 or newer).
+    required: false
+    default: "22"
+  args:
+    description: Extra arguments for mcp-eval, split on whitespace (for example "--base-dir eval"). Do not pass --update-goldens in CI.
+    required: false
+    default: ""
+  report-path:
+    description: Where to write the JSON report, relative to working-directory.
+    required: false
+    default: mcp-eval-report.json
+
+outputs:
+  exit-code:
+    description: The mcp-eval exit code (0, 1 or 2).
+    value: ${{ steps.run.outputs.exit-code }}
+  report-path:
+    description: Path of the JSON report, relative to working-directory. Absent when the exit code is 2.
+    value: ${{ inputs.report-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      if: inputs.node-version != ''
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Build mcp-eval
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        # npm ci runs the package's prepare script, which compiles dist/src.
+        npm ci --no-audit --no-fund
+        test -f dist/src/cli.js
+
+    - name: Run mcp-eval
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        MCP_EVAL_CLI: ${{ github.action_path }}/dist/src/cli.js
+        MCP_EVAL_SUITE: ${{ inputs.suite }}
+        MCP_EVAL_ARGS: ${{ inputs.args }}
+        MCP_EVAL_REPORT: ${{ inputs.report-path }}
+      run: |
+        # Inputs arrive through env, never interpolated into the script, so a suite path or
+        # argument string cannot inject shell. MCP_EVAL_ARGS is word-split on purpose.
+        set +e
+        # shellcheck disable=SC2086
+        node "$MCP_EVAL_CLI" "$MCP_EVAL_SUITE" --report "$MCP_EVAL_REPORT" --summary "$GITHUB_STEP_SUMMARY" $MCP_EVAL_ARGS
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        if [ "$code" -ne 0 ]; then
+          echo "::error title=mcp-eval::mcp-eval exited $code for $MCP_EVAL_SUITE (1 contract failure, 2 usage, configuration or target error)"
+        fi
+        exit "$code"

@@ -30,6 +30,8 @@ interface RunContext {
   baseDir: string;
   updateGoldens: boolean;
   goldensUpdated: string[];
+  /** Per-request timeout from the suite's `timeout_ms`, passed to every SDK call. */
+  timeoutMs: number;
   toolsCache?: Tool[];
 }
 
@@ -55,7 +57,7 @@ async function writeJson(path: string, value: Json): Promise<void> {
 
 async function listTools(ctx: RunContext): Promise<Tool[]> {
   if (!ctx.toolsCache) {
-    const listed = await ctx.client.listTools();
+    const listed = await ctx.client.listTools(undefined, { timeout: ctx.timeoutMs });
     ctx.toolsCache = listed.tools;
   }
   return ctx.toolsCache;
@@ -77,7 +79,7 @@ function extractText(content: unknown): string {
 
 async function callTool(ctx: RunContext, tool: string, input: Record<string, unknown>): Promise<CallOutcome> {
   try {
-    const result = await ctx.client.callTool({ name: tool, arguments: input });
+    const result = await ctx.client.callTool({ name: tool, arguments: input }, { timeout: ctx.timeoutMs });
     const text = extractText(result.content);
     let payload: Json;
     if (result.structuredContent !== undefined) {
@@ -274,7 +276,7 @@ async function runContract(ctx: RunContext, contract: Contract): Promise<Contrac
     if (!ctx.client.getServerCapabilities()?.prompts) {
       checks.push(capabilityMissing("expect_prompts", "prompts"));
     } else {
-      const listed = await ctx.client.listPrompts();
+      const listed = await ctx.client.listPrompts(undefined, { timeout: ctx.timeoutMs });
       checks.push(compareListing("expect_prompts", "prompt", contract.expect_prompts, listed.prompts.map((prompt) => prompt.name), contract.exact));
     }
   }
@@ -283,7 +285,7 @@ async function runContract(ctx: RunContext, contract: Contract): Promise<Contrac
     if (!ctx.client.getServerCapabilities()?.resources) {
       checks.push(capabilityMissing("expect_resources", "resources"));
     } else {
-      const listed = await ctx.client.listResources();
+      const listed = await ctx.client.listResources(undefined, { timeout: ctx.timeoutMs });
       checks.push(compareListing("expect_resources", "resource", contract.expect_resources, listed.resources.map((resource) => resource.uri), contract.exact));
     }
   }
@@ -343,6 +345,7 @@ export async function runSuite(loaded: LoadedSuite, options: RunOptions = {}): P
     baseDir,
     updateGoldens: options.updateGoldens === true,
     goldensUpdated: [],
+    timeoutMs: suite.timeout_ms,
   };
   const contracts: ContractResult[] = [];
   try {

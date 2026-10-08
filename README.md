@@ -2,7 +2,7 @@
 
 Shared evaluation harness for product MCPs: deterministic contract tests, golden fixtures and a CLI with CI exit codes that gates publish across JobScout, Handoff, SourcePack and sibling MCPs.
 
-**Status:** v0. The design and acceptance checklist live in the Agentic Satellite Vault:
+**Status:** v1. Installed from git, pinned by commit SHA (not on npm yet). The design and acceptance checklist live in the Agentic Satellite Vault:
 
 `Workspace/Grok/Use Cases/MCP Eval Harness.md`
 
@@ -24,7 +24,7 @@ node dist/src/cli.js examples/stub.suite.yaml
 
 The stub suite runs against the in-repo stub MCP (`examples/stub-mcp/`) and exits 0. Try breaking it: change a value in `fixtures/stub/get_listing.golden.json` and run again. The exit code becomes 1 and the output names the differing path.
 
-Once published, the same command is `npx mcp-eval suite.yaml`.
+Until the package is on npm, other repos install it from git pinned to a commit SHA (see the rollout guide below) and call `mcp-eval suite.yaml` from an npm script.
 
 ```
 Usage: mcp-eval <suite.yaml|suite.json> [options]
@@ -32,9 +32,17 @@ Usage: mcp-eval <suite.yaml|suite.json> [options]
   --json             Print the full report as JSON instead of the human summary
   --update-goldens   Rewrite golden fixtures from the current results (explicit opt-in)
   --base-dir <dir>   Resolve fixture paths against this directory (default: suite file's directory)
-
-Exit codes: 0 pass, 1 at least one contract failed, 2 usage or configuration error
+  --report <file>    Also write the full JSON report to this file
+  --summary <file>   Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
 ```
+
+### Exit codes
+
+| Code | Meaning | Examples |
+| --- | --- | --- |
+| `0` | Every contract passed. | |
+| `1` | At least one contract failed. | Missing or unexpected tool, golden mismatch, schema failure, wrong error code, a call that times out after a successful connect. |
+| `2` | Usage, configuration or target error: the suite never ran. | Invalid suite file, stdio command that cannot start, HTTP connection refused (`fetch failed`), HTTP 401 on initialise, no answer to initialise within `timeout_ms` (`Request timed out`). |
 
 ## Suite format
 
@@ -128,16 +136,87 @@ The suite points at a sibling checkout (`../../jobscout-mcp/dist/src/stdio.js`).
 
 **Correction to the v0 drift note.** v0 reported that the JobScout `dist/` advertised six tools while `src/` defined eight. That was a false positive. `jobscout_setup` and `jobscout_find_jobs` are registered with `server.registerPrompt`, not as tools, and a fresh build of jobscout-mcp `main` lists exactly six tools and two prompts. The example suite had put the two prompt names under `expect_tools` because v0 could not assert prompts. With `expect_prompts` and `exact`, the suite now passes against a correct server and would fail on a real seventh tool.
 
-## Adding the harness as a publish gate
-
-### GitHub Actions (copy-paste snippet)
-
-Add a job to the target repo's workflow. It runs after build and before any publish step.
+## Streamable HTTP targets
 
 ```yaml
-  mcp-eval:
+target:
+  transport: http
+  url: http://127.0.0.1:3000/mcp
+  headers:                       # optional, sent on every request
+    Authorization: "Bearer test-only-value"
+timeout_ms: 5000                 # applies to initialise and to every call
+```
+
+The SDK client negotiates JSON or SSE-framed responses and carries the `mcp-session-id` the server issues on every later request; stateless servers that issue none also work. `tests/http.test.ts` proves each of these against the in-repo HTTP stub (`examples/stub-mcp/http-server.ts`): JSON responses, SSE responses, session id carried after initialise, stateless mode, a bearer header from `target.headers`, a 401 when the header is missing (exit 2), a refused connection (exit 2) and a server that never answers (exit 2 within `timeout_ms`).
+
+Header values in a committed suite are literal. Contract suites are offline (see the rollout rules), so only synthetic values belong there.
+
+## Portfolio rollout guide
+
+This is how an MCP repo adopts the harness. One suite per repo, committed with the code it tests.
+
+### 1. Install, pinned by commit SHA
+
+```bash
+npm install --save-dev github:SarutobiSasuke8/mcp-eval-harness#<harness-sha>
+```
+
+which records:
+
+```json
+"devDependencies": {
+  "@sarutobi-sasuke/mcp-eval-harness": "github:SarutobiSasuke8/mcp-eval-harness#<harness-sha>"
+}
+```
+
+Always pin a full 40-character commit SHA, never a branch. The package has a `prepare` script, so npm builds `dist/src` on install and the `mcp-eval` bin works straight away. Why `prepare` rather than a committed `dist/`: no generated code in git, no risk of `dist/` drifting from `src/`, and npm runs it for every git install. The cost is that a git install also installs the harness's dev dependencies (TypeScript) once, to build; that takes a few seconds and is cached.
+
+### 2. Layout
+
+```
+eval/
+  mcp.suite.yaml          the suite
+  fixtures/               goldens and JSON Schemas the suite references
+```
+
+Inside `eval/mcp.suite.yaml`, paths are relative to the suite file, so a stdio target is usually `command: ["node", "../dist/src/stdio.js"]` and fixtures are `fixtures/<name>.golden.json`.
+
+### 3. Script
+
+```json
+"scripts": {
+  "eval:contract": "npm run build && mcp-eval eval/mcp.suite.yaml"
+}
+```
+
+`npm run eval:contract` is the one command for local runs, private repos and CI. Optionally chain it into `prepublishOnly` so `npm publish` refuses to run on a failing contract.
+
+### 4. Offline rules (contract suites)
+
+- No live network. Never call a tool that contacts a third-party service; cover it with `input_schema`, deny paths and `error_code` checks instead of goldens.
+- No secrets. No real tokens, API keys or credentials in the suite, its `env` or its `headers`; use synthetic values only. Never read `.env`.
+- Deterministic. Goldens only for deterministic tools; drop timestamps and ids with `ignore_paths`, or compare shape with `only_paths`.
+- Use `exact: true` on `expect_tools` (and on `expect_prompts` / `expect_resources` where the repo has them) so a new tool cannot ship without updating the contract.
+- Never run `--update-goldens` in CI. Golden updates are reviewed code changes.
+
+### 5. GitHub Actions (public repos)
+
+Public repos add a new workflow file, `.github/workflows/mcp-eval.yml`, that uses the composite action at the root of this repo, pinned by the same SHA:
+
+```yaml
+name: mcp-eval
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
     runs-on: ubuntu-latest
-    needs: check
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -146,45 +225,50 @@ Add a job to the target repo's workflow. It runs after build and before any publ
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx --yes @sarutobi-sasuke/mcp-eval-harness@0.1.0 eval/jobscout.suite.yaml --json > mcp-eval-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: SarutobiSasuke8/mcp-eval-harness@<harness-sha>
+        with:
+          suite: eval/mcp.suite.yaml
+          node-version: ""        # setup-node already ran above
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mcp-eval-report
           path: mcp-eval-report.json
+          if-no-files-found: ignore
 ```
 
-Make the publish job `needs: [check, mcp-eval]`. A non-zero exit from `mcp-eval` blocks it.
+Action inputs:
 
-Until the package is on npm, install it from git instead: `npm install --save-dev github:SarutobiSasuke8/mcp-eval-harness#v0-harness` and call `npx mcp-eval`.
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `suite` | (required) | Suite path, relative to `working-directory`. |
+| `working-directory` | `.` | Where `mcp-eval` runs (for a monorepo app, for example `apps/mcp`). |
+| `node-version` | `22` | Passed to `actions/setup-node`. Empty string skips setup-node. |
+| `args` | empty | Extra `mcp-eval` arguments, split on whitespace. |
+| `report-path` | `mcp-eval-report.json` | JSON report path, relative to `working-directory`. |
 
-### Local or VPS gate (when Actions billing is blocked)
+Outputs: `exit-code` and `report-path`. The action checks out nothing itself and does not build your server; build it in an earlier step. It builds the harness from its own checkout, runs `mcp-eval --report <report-path> --summary $GITHUB_STEP_SUMMARY`, writes a Markdown table to the job summary (or an error block on exit 2), and fails the step on any non-zero exit.
 
-Actions billing is blocked on some repos, so the gate must also run without GitHub. Wire it into the publish script of the target repo:
+### 6. Private repos (Actions billing-blocked)
 
-```json
-{
-  "scripts": {
-    "verify": "npm run check && mcp-eval eval/jobscout.suite.yaml",
-    "prepublishOnly": "npm run verify"
-  }
-}
-```
-
-`npm publish` then refuses to run if any contract fails. The same one-liner works from a VPS cron or a release shell:
+No workflow. Run `npm run eval:contract` locally or on the VPS before any publish, and paste the output into the PR body with where it ran. The same command works from a release shell:
 
 ```bash
-cd /srv/jobscout-mcp && git pull --ff-only && npm ci && npm run build && npx mcp-eval eval/jobscout.suite.yaml --json > /var/log/mcp-eval/jobscout-$(date +%F).json
+cd /srv/jobscout-mcp && git pull --ff-only && npm ci && npm run eval:contract
 ```
 
-A non-zero exit stops the shell chain before any `npm publish` that follows it.
+A non-zero exit stops the chain before any `npm publish` that follows it.
+
+### 7. Moving the pin
+
+To adopt a newer harness, change the SHA in both `package.json` and `mcp-eval.yml` in one PR, run `npm install`, and check `npm run eval:contract` still passes.
 
 ## v0 decisions (answers to the design's open questions)
 
 - **Language:** TypeScript, ESM, Node 20 or newer. Matches the sibling MCP repos, so one toolchain.
 - **Golden updates:** only with `--update-goldens`. Never implicit, never on CI.
 - **Client:** wrap the official SDK client (`@modelcontextprotocol/client` 2.2.0, pinned to the same line as the `@modelcontextprotocol/server` 2.2.0 that JobScout uses). The harness never speaks raw JSON-RPC.
-- **Distribution:** copy-paste workflow snippet in v0. No reusable GitHub Action yet; that waits until two or more repos have adopted the snippet and the shape is stable.
+- **Distribution:** copy-paste workflow snippet in v0. v1 (#4) replaces it with the composite action in `action.yml` and a git install pinned by commit SHA, because ten portfolio repos are adopting at once and need one pinned interface.
 
 ## MVP acceptance checklist
 
@@ -193,23 +277,25 @@ A non-zero exit stops the shell chain before any `npm publish` that follows it.
 - [x] At least one golden fixture compare (whole result, `ignore_paths` and `only_paths` variants in `examples/stub.suite.yaml`).
 - [x] At least one intentional deny or error-path assertion (`is_error` + `error_message` for `limit > 100`, `error_code: INVALID_PARAMS` for an unregistered tool).
 - [x] Example suite showing how JobScout would plug in (`examples/jobscout.suite.yaml`, run against the sibling build).
-- [x] Docs: GitHub Actions YAML snippet and a local or VPS command for the publish gate.
+- [x] Docs: GitHub Actions usage and a local or VPS command for the publish gate (now the portfolio rollout guide).
 - [x] No credentials in git. The harness reads nothing from `.env`; targets inherit the environment only if `target.env` is set.
 - [x] British English; no em dashes.
 
 Deferred from v0, with reasons:
 
-- **Reusable GitHub Action** (`uses: SarutobiSasuke8/mcp-eval-harness@v1`): deferred until the snippet has been adopted by at least two repos, so the action wraps a known-stable interface.
+- **Reusable GitHub Action:** shipped in v1 (#4) as `action.yml`, used by commit SHA. No tags or releases.
 - **Prompts and resources contracts:** added after v0 (#3) as listing contracts (`expect_prompts`, `expect_resources`, `exact`). Content goldens for prompts and resources are still deferred.
-- **npm publish of the package:** the package is shaped for publishing (`bin`, `files`, exact pins) but not yet published. Install from git until then.
-- **Streamable HTTP end-to-end test:** the transport is wired through the SDK client and typed in the suite schema, but the test suite only exercises stdio because the stub is stdio-only. An HTTP stub is a small follow-up.
+- **npm publish of the package:** still not published (Alexei decides). v1 makes the git install work through a `prepare` build.
+- **Streamable HTTP end-to-end test:** shipped in v1 (#4) with the in-repo HTTP stub and `tests/http.test.ts`.
 - **Parallel contract execution:** contracts run sequentially against one connection. Suites are small and deterministic, so speed is not the constraint yet.
 
 ## Layout
 
 ```
+action.yml     reusable composite GitHub Action
 src/           runner, CLI, suite schema, golden helpers
-examples/      stub MCP (stdio; `--tools-only` drops prompts and resources) and example suites
+examples/      stub MCP (stdio, `--tools-only` drops prompts and resources; HTTP stub) and example suites
+scripts/       exercise-action.mjs runs action.yml locally
 fixtures/      goldens and JSON Schemas for the examples
 tests/         node --test suites (compiled to dist/tests)
 ```
@@ -219,6 +305,7 @@ tests/         node --test suites (compiled to dist/tests)
 ```bash
 npm run check      # typecheck, lint, build and test
 npm run eval:stub  # build and run the stub suite
+npm run action:local  # run action.yml's steps locally with bash (pass, fail and exit 2 scenarios)
 ```
 
 ## Licence

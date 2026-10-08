@@ -6,7 +6,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   { ignores: ["dist/**", "node_modules/**"] },
   {
-    files: ["eslint.config.js"],
+    files: ["eslint.config.js", "scripts/**/*.mjs"],
     languageOptions: {
       globals: { console: "readonly", process: "readonly", URL: "readonly" },
     },
