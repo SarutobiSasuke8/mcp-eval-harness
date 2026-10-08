@@ -49,6 +49,13 @@ timeout_ms: 30000
 contracts:
   - name: tools_listed
     expect_tools: [search_jobs, get_listing]
+    exact: true                         # also fail on tools the contract does not name
+
+  - name: prompts_listed
+    expect_prompts: [search_brief]
+
+  - name: resources_listed
+    expect_resources: ["stub://listings/index"]
 
   - name: search_jobs_input_schema
     input_schema:
@@ -83,6 +90,9 @@ Fixture paths resolve relative to the suite file unless `--base-dir` is given. S
 | Key | What it checks |
 | --- | --- |
 | `expect_tools` | Every named tool appears in `tools/list`. A missing tool fails. |
+| `expect_prompts` | Every named prompt appears in `prompts/list`. A missing prompt fails. If the server does not advertise the `prompts` capability, the check fails with a message saying so (not a transport error). |
+| `expect_resources` | Every listed resource URI appears in `resources/list` (matched on `uri`, not `name`). Same capability rule as prompts, for `resources`. |
+| `exact` | Contract-level, default `false`. When `true`, each listing key in the contract (`expect_tools`, `expect_prompts`, `expect_resources`) also fails on names the server lists that the contract does not, and the failure prints both the missing and the unexpected sets. Use it to catch an unreviewed tool appearing. |
 | `input_schema` | The listed tool's advertised `inputSchema` equals the JSON Schema fixture (treated as a golden). |
 | `tool` + `input` | Calls the tool. With no `assert`, a successful non-error result passes. |
 
@@ -112,11 +122,11 @@ Goldens are written only when you pass `--update-goldens`. Without the flag, a m
 
 ## JobScout example
 
-`examples/jobscout.suite.yaml` shows how JobScout plugs in: expected tool list, the advertised `jobscout_search_jobs` input schema as a fixture, a golden for the deterministic `jobscout_classify_jobs` tool, a shape-only golden for `jobscout_list_sources` using `only_paths` (enabled state depends on environment keys and is excluded), and the over-limit deny path. `jobscout_search_jobs` contacts live job boards, so it never carries a golden.
+`examples/jobscout.suite.yaml` shows how JobScout plugs in: the exact tool list (six tools, `exact: true`), the two prompts (`jobscout_setup`, `jobscout_find_jobs`) under `expect_prompts`, the advertised `jobscout_search_jobs` input schema as a fixture, a golden for the deterministic `jobscout_classify_jobs` tool, a shape-only golden for `jobscout_list_sources` using `only_paths` (enabled state depends on environment keys and is excluded), and the over-limit deny path. `jobscout_search_jobs` contacts live job boards, so it never carries a golden.
 
 The suite points at a sibling checkout (`../../jobscout-mcp/dist/src/stdio.js`). In the JobScout repo itself it would live at `eval/jobscout.suite.yaml` with `command: ["node", "dist/src/stdio.js"]`.
 
-First run on this machine caught a real drift: the JobScout `dist/` was stale against `src/` and advertised six tools, not eight. That is the harness doing its job.
+**Correction to the v0 drift note.** v0 reported that the JobScout `dist/` advertised six tools while `src/` defined eight. That was a false positive. `jobscout_setup` and `jobscout_find_jobs` are registered with `server.registerPrompt`, not as tools, and a fresh build of jobscout-mcp `main` lists exactly six tools and two prompts. The example suite had put the two prompt names under `expect_tools` because v0 could not assert prompts. With `expect_prompts` and `exact`, the suite now passes against a correct server and would fail on a real seventh tool.
 
 ## Adding the harness as a publish gate
 
@@ -190,7 +200,7 @@ A non-zero exit stops the shell chain before any `npm publish` that follows it.
 Deferred from v0, with reasons:
 
 - **Reusable GitHub Action** (`uses: SarutobiSasuke8/mcp-eval-harness@v1`): deferred until the snippet has been adopted by at least two repos, so the action wraps a known-stable interface.
-- **Prompts and resources contracts:** v0 covers tools only. Sibling MCPs expose prompts, but the publish-gate risk is in tool results, which is where goldens pay off first.
+- **Prompts and resources contracts:** added after v0 (#3) as listing contracts (`expect_prompts`, `expect_resources`, `exact`). Content goldens for prompts and resources are still deferred.
 - **npm publish of the package:** the package is shaped for publishing (`bin`, `files`, exact pins) but not yet published. Install from git until then.
 - **Streamable HTTP end-to-end test:** the transport is wired through the SDK client and typed in the suite schema, but the test suite only exercises stdio because the stub is stdio-only. An HTTP stub is a small follow-up.
 - **Parallel contract execution:** contracts run sequentially against one connection. Suites are small and deterministic, so speed is not the constraint yet.
@@ -199,7 +209,7 @@ Deferred from v0, with reasons:
 
 ```
 src/           runner, CLI, suite schema, golden helpers
-examples/      stub MCP (stdio) and example suites
+examples/      stub MCP (stdio; `--tools-only` drops prompts and resources) and example suites
 fixtures/      goldens and JSON Schemas for the examples
 tests/         node --test suites (compiled to dist/tests)
 ```

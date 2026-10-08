@@ -7,8 +7,18 @@ target:
   transport: stdio
   command: ["node", "../dist/examples/stub-mcp/server.js"]
 contracts:
+  # exact: true also fails if the server lists a tool, prompt or resource the contract does not name.
   - name: tools_listed
     expect_tools: [search_jobs, get_listing]
+    exact: true
+
+  - name: prompts_listed
+    expect_prompts: [search_brief]
+    exact: true
+
+  - name: resources_listed
+    expect_resources: ["stub://listings/index"]
+    exact: true
 
   - name: search_jobs_input_schema
     input_schema:

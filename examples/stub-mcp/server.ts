@@ -11,6 +11,11 @@
  * - `get_listing` with an unknown `id` returns a tool result with `isError: true`.
  * - Calling a tool that is not registered is a protocol-level failure, which the SDK reports
  *   as JSON-RPC error `INVALID_PARAMS` (-32602). The suite uses that for the `error_code` path.
+ *
+ * It also registers one prompt (`search_brief`) and one static resource
+ * (`stub://listings/index`), so listing contracts for prompts and resources have a target.
+ * Start it with `--tools-only` to register tools alone: the server then advertises neither the
+ * prompts nor the resources capability, which exercises the "capability not advertised" path.
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -35,7 +40,12 @@ function failure(message: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 
-export function createStubServer(): McpServer {
+export interface StubOptions {
+  /** Register tools only, so the prompts and resources capabilities are not advertised. */
+  toolsOnly?: boolean;
+}
+
+export function createStubServer(options: StubOptions = {}): McpServer {
   const server = new McpServer({ name: "stub-mcp", version: "0.1.0" });
 
   server.registerTool(
@@ -77,10 +87,40 @@ export function createStubServer(): McpServer {
     },
   );
 
+  if (options.toolsOnly) {
+    return server;
+  }
+
+  server.registerPrompt(
+    "search_brief",
+    {
+      title: "Search brief (stub)",
+      description: "Asks the model to run search_jobs for a role and summarise the results.",
+      argsSchema: z.object({ role: z.string().max(240).optional() }),
+    },
+    ({ role }) => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: { type: "text" as const, text: `Run search_jobs for ${role ?? "the role I name"} and summarise the matches.` },
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "listings-index",
+    "stub://listings/index",
+    { title: "Listing index (stub)", description: "Ids and titles of every stub listing.", mimeType: "application/json" },
+    (uri) => ({
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(listings.map((job) => ({ id: job.id, title: job.title }))) }],
+    }),
+  );
+
   return server;
 }
 
-const server = createStubServer();
+const server = createStubServer({ toolsOnly: process.argv.includes("--tools-only") });
 await server.connect(new StdioServerTransport(process.stdin, process.stdout));
 process.on("SIGINT", () => void server.close());
 process.on("SIGTERM", () => void server.close());

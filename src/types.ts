@@ -44,6 +44,15 @@ export const contractSchema = z
     name: z.string().min(1),
     /** Every listed tool must be present in `tools/list`. */
     expect_tools: z.array(z.string().min(1)).optional(),
+    /** Every listed prompt name must be present in `prompts/list`. */
+    expect_prompts: z.array(z.string().min(1)).optional(),
+    /** Every listed resource URI must be present in `resources/list`. */
+    expect_resources: z.array(z.string().min(1)).optional(),
+    /**
+     * When true, every listing key in this contract (`expect_tools`, `expect_prompts`,
+     * `expect_resources`) also fails on names the server lists that the contract does not.
+     */
+    exact: z.boolean().default(false),
     /** Compare a listed tool's advertised `inputSchema` against a JSON Schema fixture, keyed by tool name. */
     input_schema: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Tool to call. */
@@ -51,8 +60,8 @@ export const contractSchema = z
     input: z.record(z.string(), z.unknown()).optional(),
     assert: assertSchema.optional(),
   })
-  .refine((contract) => contract.expect_tools || contract.input_schema || contract.tool, {
-    message: "A contract needs at least one of expect_tools, input_schema or tool",
+  .refine((contract) => contract.expect_tools || contract.expect_prompts || contract.expect_resources || contract.input_schema || contract.tool, {
+    message: "A contract needs at least one of expect_tools, expect_prompts, expect_resources, input_schema or tool",
   });
 
 export const suiteSchema = z.object({

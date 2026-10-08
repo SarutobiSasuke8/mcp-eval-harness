@@ -12,6 +12,8 @@ target:
   transport: stdio
   command: ["node", "../../jobscout-mcp/dist/src/stdio.js"]
 contracts:
+  # jobscout-mcp main registers six tools and two prompts. exact: true means a seventh tool
+  # added without updating this contract fails the suite.
   - name: tools_listed
     expect_tools:
       - jobscout_list_sources
@@ -20,8 +22,14 @@ contracts:
       - jobscout_deduplicate
       - jobscout_source_yield
       - jobscout_briefing
+    exact: true
+
+  # jobscout_setup and jobscout_find_jobs are prompts (server.registerPrompt), not tools.
+  - name: prompts_listed
+    expect_prompts:
       - jobscout_setup
       - jobscout_find_jobs
+    exact: true
 
   - name: search_jobs_input_schema
     input_schema:
