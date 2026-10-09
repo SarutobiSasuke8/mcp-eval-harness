@@ -1,6 +1,6 @@
 export { loadSuite, parseSuite } from "./suite.js";
-export { runSuite, ERROR_CODES } from "./runner.js";
-export { formatHuman, formatJson } from "./report.js";
+export { runSuite, compareListing, ERROR_CODES } from "./runner.js";
+export { formatHuman, formatJson, formatMarkdown, formatMarkdownError } from "./report.js";
 export { normalise, canonicalise, diff, parsePath, pickPath, removePath } from "./golden.js";
 export { connectTarget } from "./target.js";
 export { suiteSchema, contractSchema, targetSchema } from "./types.js";
