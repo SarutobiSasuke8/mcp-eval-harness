@@ -111,3 +111,46 @@ export interface RunOptions {
   /** Directory fixture paths are resolved against. Defaults to the suite file's directory. */
   baseDir?: string;
 }
+
+/** Exit codes, shared by a single suite and a multi-suite run. */
+export type ExitCode = 0 | 1 | 2;
+
+/** One suite's result inside a multi-suite run. `report` is absent when the suite never ran (exit 2). */
+export interface SuiteOutcome {
+  /** The suite path as given on the command line. */
+  path: string;
+  /** 0 every contract passed, 1 at least one contract failed, 2 the suite never ran. */
+  exit_code: ExitCode;
+  report?: SuiteReport;
+  /** Usage, configuration or target error when `exit_code` is 2. */
+  error?: string;
+  duration_ms: number;
+}
+
+/** Report for a run over several suites, in the order the suites were given. */
+export interface RunReport {
+  passed: boolean;
+  /** Highest suite exit code: 2 if any suite never ran, else 1 if any contract failed, else 0. */
+  exit_code: ExitCode;
+  concurrency: number;
+  suites: SuiteOutcome[];
+  summary: {
+    suites: number;
+    passed: number;
+    failed: number;
+    errored: number;
+    contracts: { total: number; passed: number; failed: number };
+  };
+  /** Wall-clock time for the whole run. With concurrency above 1 this is less than the sum of suite durations. */
+  duration_ms: number;
+}
+
+export interface RunSuitesOptions extends RunOptions {
+  /** Maximum number of suites (each with its own server process or HTTP session) in flight. Default 1. */
+  concurrency?: number;
+  /**
+   * Called once per suite, strictly in input order, as soon as that suite and every suite before
+   * it have finished. Lets a caller stream output without losing deterministic ordering.
+   */
+  onOutcome?: (outcome: SuiteOutcome, index: number) => void;
+}

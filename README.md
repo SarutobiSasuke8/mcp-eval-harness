@@ -27,14 +27,33 @@ The stub suite runs against the in-repo stub MCP (`examples/stub-mcp/`) and exit
 Until the package is on npm, other repos install it from git pinned to a commit SHA (see the rollout guide below) and call `mcp-eval suite.yaml` from an npm script.
 
 ```
-Usage: mcp-eval <suite.yaml|suite.json> [options]
+Usage: mcp-eval <suite.yaml|suite.json> [more suites...] [options]
 
-  --json             Print the full report as JSON instead of the human summary
-  --update-goldens   Rewrite golden fixtures from the current results (explicit opt-in)
-  --base-dir <dir>   Resolve fixture paths against this directory (default: suite file's directory)
-  --report <file>    Also write the full JSON report to this file
-  --summary <file>   Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
+  --json               Print the full report as JSON instead of the human summary
+  --update-goldens     Rewrite golden fixtures from the current results (explicit opt-in)
+  --base-dir <dir>     Resolve fixture paths against this directory (default: suite file's directory)
+  --report <file>      Also write the full JSON report to this file
+  --summary <file>     Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
+  --concurrency <n>    Run up to n suites at once, each with its own server process (default 1).
+                       Output stays in the order the suites were given.
 ```
+
+### Several suites and `--concurrency`
+
+Pass more than one suite to run them in one go, for example the portfolio sweep:
+
+```bash
+mcp-eval ../jobscout-mcp/eval/mcp.suite.yaml ../handoff-mcp/eval/mcp.suite.yaml ../sourcepack-mcp/eval/mcp.suite.yaml --concurrency 4
+```
+
+- **Isolation.** Each suite connects its own target: a stdio suite starts its own server process and an HTTP suite opens its own session. Contracts inside one suite still run one after another over that suite's single connection, so `--concurrency` parallelises suites, not contracts.
+- **Deterministic order.** Results are always reported in the order the suites were given, never in the order they finish. Human output streams each suite's block as soon as it and every suite before it are done, then prints a run summary with one line per suite (result, timing, failed contract names) and the totals. With `--concurrency 1` (the default) and with `--concurrency 4` the per-suite results are identical; only timings differ.
+- **Failures.** A suite that cannot load or connect is recorded as `ERROR` (its message also goes to stderr) and does not stop the others.
+- **Exit code.** The meaning is unchanged; with several suites the CLI exits with the highest code across them: `2` if any suite could not run, else `1` if any contract failed, else `0`.
+- **Report shapes.** With one suite, `--json` and `--report` keep the v1 `SuiteReport` shape, so existing callers (including the composite action) see no change. With several suites they produce a `RunReport`: `{ passed, exit_code, concurrency, suites: [{ path, exit_code, report?, error?, duration_ms }], summary, duration_ms }`. `--summary` appends a suite table followed by each suite's own Markdown block.
+- **Goldens.** `--update-goldens` is refused with `--concurrency` above 1 (exit 2), because suites may share fixture files. Update goldens one suite at a time.
+
+The same runner is exported for programmatic use as `runSuites(paths, { concurrency, onOutcome })`, with the ordering helper `mapWithConcurrency`.
 
 ### Exit codes
 
@@ -287,9 +306,30 @@ Deferred from v0, with reasons:
 
 - **Reusable GitHub Action:** shipped in v1 (#4) as `action.yml`, used by commit SHA. No tags or releases.
 - **Prompts and resources contracts:** added after v0 (#3) as listing contracts (`expect_prompts`, `expect_resources`, `exact`). Content goldens for prompts and resources are still deferred.
-- **npm publish of the package:** still not published (Alexei decides). v1 makes the git install work through a `prepare` build.
+- **npm publish of the package:** still not published (Alexei decides). v1 makes the git install work through a `prepare` build; #7 makes the package publish-ready (see below) without publishing it.
 - **Streamable HTTP end-to-end test:** shipped in v1 (#4) with the in-repo HTTP stub and `tests/http.test.ts`.
-- **Parallel contract execution:** contracts run sequentially against one connection. Suites are small and deterministic, so speed is not the constraint yet.
+- **Parallel execution:** suites run in parallel with `--concurrency` since #7, each with its own server process. Contracts inside one suite still run sequentially over one connection, because they share that server's state and suites are small.
+
+## npm publish readiness (not published)
+
+The package is ready to publish but has not been published. Nothing in this repo runs `npm publish`, creates tags or releases, or publishes from CI.
+
+What is in place:
+
+- `files` allow-list: only `dist/src` (JavaScript and type declarations, no source maps), `README.md`, `LICENSE` and `package.json` ship. Tests, examples, fixtures, scripts, `action.yml` and the workflow stay out.
+- `build:package` clears `dist/src` before compiling, so a stale file from an earlier build cannot ship. `prepare` runs it on `npm pack`, `npm publish` and git installs.
+- `exports` with a `types` condition, plus `./package.json`; `main`, `types`, `bin` (`mcp-eval`) and `engines` (`node >=20`).
+- `publishConfig.access: public`, which a scoped package needs on first publish.
+- `prepublishOnly` runs `npm run check` (typecheck, lint, build, tests), so a publish refuses to run on a failing build.
+- `npm run pack:check` is `npm pack --dry-run`: it lists exactly what would ship without writing a tarball.
+
+Steps left for Alexei, in order, when he decides to publish:
+
+1. Confirm the `@sarutobi-sasuke` npm scope exists and belongs to his npm account (or rename the package to a scope he owns).
+2. Choose the version (`0.1.0` today) and bump it if wanted.
+3. Run `npm run pack:check` and read the file list.
+4. Log in to npm and run `npm publish` by hand from a clean checkout of `main`.
+5. Once it is on npm, switch the rollout guide's install step from the git SHA pin to the npm version.
 
 ## Layout
 

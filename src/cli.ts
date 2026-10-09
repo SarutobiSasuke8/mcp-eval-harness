@@ -5,7 +5,8 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-import { formatHuman, formatJson, formatMarkdown, formatMarkdownError } from "./report.js";
+import { parseConcurrency, runSuites } from "./parallel.js";
+import { formatHuman, formatJson, formatMarkdown, formatMarkdownError, formatRunHuman, formatRunJson, formatRunMarkdown } from "./report.js";
 import { runSuite } from "./runner.js";
 import { loadSuite } from "./suite.js";
 
@@ -15,20 +16,22 @@ export const EXIT_PASS = 0;
 export const EXIT_FAIL = 1;
 export const EXIT_USAGE = 2;
 
-const USAGE = `Usage: mcp-eval <suite.yaml|suite.json> [options]
+const USAGE = `Usage: mcp-eval <suite.yaml|suite.json> [more suites...] [options]
 
 Runs contract checks and golden fixture compares against an MCP server and exits
 non-zero on any failure, so it can gate publish in CI or a local verify step.
 
 Options:
-  --json             Print the full report as JSON instead of the human summary
-  --update-goldens   Rewrite golden fixtures from the current results (explicit opt-in)
-  --base-dir <dir>   Resolve fixture paths against this directory (default: suite file's directory)
-  --report <file>    Also write the full JSON report to this file
-  --summary <file>   Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
-  -h, --help         Show this help
+  --json               Print the full report as JSON instead of the human summary
+  --update-goldens     Rewrite golden fixtures from the current results (explicit opt-in)
+  --base-dir <dir>     Resolve fixture paths against this directory (default: suite file's directory)
+  --report <file>      Also write the full JSON report to this file
+  --summary <file>     Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
+  --concurrency <n>    Run up to n suites at once, each with its own server process (default 1).
+                       Output stays in the order the suites were given.
+  -h, --help           Show this help
 
-Exit codes:
+Exit codes (with several suites, the highest across them):
   0  every contract passed
   1  at least one contract failed
   2  usage or configuration error (bad suite, unreachable or refused target,
@@ -41,11 +44,14 @@ const CLI_OPTIONS = {
   "base-dir": { type: "string" },
   report: { type: "string" },
   summary: { type: "string" },
+  concurrency: { type: "string" },
   help: { type: "boolean", short: "h", default: false },
 } as const;
 
+type ParsedArgs = ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true }>>;
+
 export async function main(argv: string[]): Promise<number> {
-  let parsed: ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true }>>;
+  let parsed: ParsedArgs;
   try {
     parsed = parseArgs({ args: argv, options: CLI_OPTIONS, allowPositionals: true });
   } catch (error) {
@@ -56,12 +62,29 @@ export async function main(argv: string[]): Promise<number> {
     process.stdout.write(USAGE);
     return EXIT_PASS;
   }
-  const suitePath = parsed.positionals[0];
-  if (!suitePath || parsed.positionals.length !== 1) {
+  const suitePaths = parsed.positionals;
+  if (suitePaths.length === 0) {
     process.stderr.write(USAGE);
     return EXIT_USAGE;
   }
 
+  let concurrency: number;
+  try {
+    concurrency = parseConcurrency(parsed.values.concurrency);
+  } catch (error) {
+    process.stderr.write(`mcp-eval: ${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
+    return EXIT_USAGE;
+  }
+  if (parsed.values["update-goldens"] && concurrency > 1) {
+    process.stderr.write("mcp-eval: --update-goldens rewrites fixtures that suites may share, so it runs with --concurrency 1 only\n");
+    return EXIT_USAGE;
+  }
+
+  return suitePaths.length === 1 ? runSingle(suitePaths[0] as string, parsed) : runMany(suitePaths, concurrency, parsed);
+}
+
+/** One suite: the original v1 output shapes (a `SuiteReport`), unchanged. */
+async function runSingle(suitePath: string, parsed: ParsedArgs): Promise<number> {
   let report: SuiteReport;
   try {
     const loaded = await loadSuite(suitePath);
@@ -86,6 +109,36 @@ export async function main(argv: string[]): Promise<number> {
     await writeOutput(parsed.values.summary, formatMarkdown(report), "append");
   }
   return report.passed ? EXIT_PASS : EXIT_FAIL;
+}
+
+/**
+ * Several suites: a `RunReport`. Human output streams each suite's block in the order the suites
+ * were given (never in finishing order), then prints the run summary with per-suite timing.
+ */
+async function runMany(suitePaths: string[], concurrency: number, parsed: ParsedArgs): Promise<number> {
+  const json = parsed.values.json === true;
+  const run = await runSuites(suitePaths, {
+    concurrency,
+    updateGoldens: parsed.values["update-goldens"] === true,
+    ...(parsed.values["base-dir"] ? { baseDir: parsed.values["base-dir"] } : {}),
+    onOutcome: (outcome) => {
+      if (outcome.error !== undefined) {
+        process.stderr.write(`mcp-eval: ${outcome.path}: ${outcome.error}\n`);
+      }
+      if (!json) {
+        process.stdout.write(outcome.report ? `${formatHuman(outcome.report)}\n\n` : `mcp-eval: ${outcome.path}\nERROR: could not run (exit 2), see stderr\n\n`);
+      }
+    },
+  });
+
+  process.stdout.write(`${json ? formatRunJson(run) : formatRunHuman(run)}\n`);
+  if (parsed.values.report) {
+    await writeOutput(parsed.values.report, `${formatRunJson(run)}\n`, "write");
+  }
+  if (parsed.values.summary) {
+    await writeOutput(parsed.values.summary, formatRunMarkdown(run), "append");
+  }
+  return run.exit_code;
 }
 
 async function writeOutput(path: string, content: string, mode: "write" | "append"): Promise<void> {
