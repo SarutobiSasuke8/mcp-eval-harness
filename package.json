@@ -22,23 +22,33 @@
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
-    ".": "./dist/src/index.js"
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist/src",
+    "!dist/src/**/*.map",
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:package": "tsc -p tsconfig.build.json",
+    "build:package": "node -e \"require('node:fs').rmSync('dist/src',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "prepare": "npm run build:package",
+    "prepublishOnly": "npm run check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "check": "npm run typecheck && npm run lint && npm test",
     "eval:stub": "npm run build && node dist/src/cli.js examples/stub.suite.yaml",
-    "action:local": "npm run build && node scripts/exercise-action.mjs"
+    "action:local": "npm run build && node scripts/exercise-action.mjs",
+    "pack:check": "npm pack --dry-run"
   },
   "keywords": [
     "mcp",
