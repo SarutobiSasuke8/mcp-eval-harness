@@ -30,10 +30,10 @@ async function mcpEval(...args: string[]): Promise<CliRun> {
   }
 }
 
-async function tempSuite(contracts: string): Promise<{ dir: string; file: string }> {
+async function tempSuite(contracts: string, stubArgs: string[] = []): Promise<{ dir: string; file: string }> {
   const dir = await mkdtemp(join(tmpdir(), "mcp-eval-"));
   const file = join(dir, "suite.yaml");
-  const command = JSON.stringify([process.execPath, stub]);
+  const command = JSON.stringify([process.execPath, stub, ...stubArgs]);
   await writeFile(file, `version: 1\nname: temp\ntarget:\n  transport: stdio\n  command: ${command}\ncontracts:\n${contracts}`, "utf8");
   return { dir, file };
 }
@@ -45,7 +45,7 @@ void describe("mcp-eval CLI", () => {
     const report = JSON.parse(result.stdout) as SuiteReport;
     assert.equal(report.passed, true);
     assert.equal(report.summary.failed, 0);
-    assert.equal(report.summary.total, 8);
+    assert.equal(report.summary.total, 10);
     assert.deepEqual(report.goldens_updated, []);
   });
 
@@ -53,7 +53,7 @@ void describe("mcp-eval CLI", () => {
     const result = await mcpEval(stubSuite);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /PASS {2}tools_listed/);
-    assert.match(result.stdout, /PASSED: 8\/8 contracts passed/);
+    assert.match(result.stdout, /PASSED: 10\/10 contracts passed/);
   });
 
   void it("exits non-zero when an expected tool is missing", async () => {
@@ -63,6 +63,105 @@ void describe("mcp-eval CLI", () => {
     const report = JSON.parse(result.stdout) as SuiteReport;
     assert.equal(report.passed, false);
     assert.match(report.contracts[0]?.checks[0]?.message ?? "", /Missing tools: delete_everything/);
+  });
+
+  void it("passes expect_prompts when the prompt is listed", async () => {
+    const { file } = await tempSuite(`  - name: prompts
+    expect_prompts: [search_brief]
+`);
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 0, result.stdout);
+    const report = JSON.parse(result.stdout) as SuiteReport;
+    assert.equal(report.contracts[0]?.checks[0]?.check, "expect_prompts");
+    assert.match(report.contracts[0]?.checks[0]?.message ?? "", /All 1 expected prompt listed/);
+  });
+
+  void it("fails expect_prompts when a prompt is missing", async () => {
+    const { file } = await tempSuite(`  - name: prompts
+    expect_prompts: [search_brief, apply_for_me]
+`);
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 1);
+    const report = JSON.parse(result.stdout) as SuiteReport;
+    assert.match(report.contracts[0]?.checks[0]?.message ?? "", /Missing prompts: apply_for_me \(listed: search_brief\)/);
+  });
+
+  void it("fails with a clear message when the server does not advertise prompts or resources", async () => {
+    const { file } = await tempSuite(
+      `  - name: prompts
+    expect_prompts: [search_brief]
+  - name: resources
+    expect_resources: ["stub://listings/index"]
+  - name: tools_still_work
+    expect_tools: [search_jobs]
+`,
+      ["--tools-only"],
+    );
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 1, result.stderr);
+    const report = JSON.parse(result.stdout) as SuiteReport;
+    assert.deepEqual(report.contracts.map((c) => c.passed), [false, false, true]);
+    assert.match(report.contracts[0]?.checks[0]?.message ?? "", /does not advertise the prompts capability/);
+    assert.match(report.contracts[1]?.checks[0]?.message ?? "", /does not advertise the resources capability/);
+  });
+
+  void it("checks expect_resources by URI, present and missing", async () => {
+    const { file } = await tempSuite(
+      `  - name: present
+    expect_resources: ["stub://listings/index"]
+  - name: missing
+    expect_resources: ["stub://listings/archive"]
+`,
+    );
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 1);
+    const report = JSON.parse(result.stdout) as SuiteReport;
+    assert.deepEqual(report.contracts.map((c) => c.passed), [true, false]);
+    assert.match(report.contracts[1]?.checks[0]?.message ?? "", /Missing resources: stub:\/\/listings\/archive/);
+  });
+
+  void it("exact: true catches an extra tool and prints missing and unexpected sets", async () => {
+    const { file } = await tempSuite(`  - name: tools
+    expect_tools: [search_jobs, delete_everything]
+    exact: true
+`);
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 1);
+    const report = JSON.parse(result.stdout) as SuiteReport;
+    const check = report.contracts[0]?.checks[0];
+    assert.match(check?.message ?? "", /Missing tools: delete_everything; Unexpected tools: get_listing/);
+    assert.deepEqual(check?.details, { missing: ["delete_everything"], unexpected: ["get_listing"] });
+  });
+
+  void it("exact: true fails on an extra tool even when nothing is missing", async () => {
+    const { file } = await tempSuite(`  - name: tools
+    expect_tools: [search_jobs]
+    exact: true
+`);
+    const result = await mcpEval(file);
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /Missing tools: none; Unexpected tools: get_listing/);
+  });
+
+  void it("exact off (the default) still passes when the server lists a superset", async () => {
+    const { file } = await tempSuite(`  - name: tools
+    expect_tools: [search_jobs]
+  - name: tools_explicit
+    expect_tools: [search_jobs]
+    exact: false
+`);
+    const result = await mcpEval(file, "--json");
+    assert.equal(result.code, 0, result.stdout);
+  });
+
+  void it("rejects a non-boolean exact as a configuration error", async () => {
+    const { file } = await tempSuite(`  - name: tools
+    expect_tools: [search_jobs]
+    exact: "yes"
+`);
+    const result = await mcpEval(file);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /exact/);
   });
 
   void it("exits non-zero on a golden mismatch and names the differing path", async () => {

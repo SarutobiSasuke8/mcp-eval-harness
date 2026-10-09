@@ -223,19 +223,69 @@ function checkErrorExpectations(assertion: Assertion, outcome: CallOutcome): Che
   return checks;
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Compares an expected name set against what the server listed. Missing names always fail;
+ * with `exact`, names the server lists that the contract does not are reported as unexpected
+ * and fail too, so an unreviewed tool, prompt or resource cannot slip in silently.
+ */
+export function compareListing(check: string, noun: string, expected: string[], listed: string[], exact: boolean): CheckResult {
+  const listedSet = new Set(listed);
+  const expectedSet = new Set(expected);
+  const missing = expected.filter((name) => !listedSet.has(name));
+  const unexpected = exact ? [...listedSet].filter((name) => !expectedSet.has(name)) : [];
+  if (missing.length === 0 && unexpected.length === 0) {
+    return {
+      check,
+      passed: true,
+      message: exact ? `Exactly the ${plural(expectedSet.size, `expected ${noun}`)} listed` : `All ${plural(expectedSet.size, `expected ${noun}`)} listed`,
+    };
+  }
+  const parts: string[] = [];
+  parts.push(`Missing ${noun}s: ${missing.length > 0 ? missing.join(", ") : "none"}`);
+  if (exact) {
+    parts.push(`Unexpected ${noun}s: ${unexpected.length > 0 ? unexpected.join(", ") : "none"}`);
+  }
+  parts.push(`(listed: ${[...listedSet].join(", ") || "none"})`);
+  return { check, passed: false, message: parts.join("; ").replace("; (listed", " (listed"), details: { missing, unexpected } };
+}
+
+function capabilityMissing(check: string, capability: "prompts" | "resources"): CheckResult {
+  return {
+    check,
+    passed: false,
+    message: `Server does not advertise the ${capability} capability, so ${capability}/list cannot be checked`,
+  };
+}
+
 async function runContract(ctx: RunContext, contract: Contract): Promise<ContractResult> {
   const started = performance.now();
   const checks: CheckResult[] = [];
 
   if (contract.expect_tools) {
     const tools = await listTools(ctx);
-    const names = new Set(tools.map((tool) => tool.name));
-    const missing = contract.expect_tools.filter((name) => !names.has(name));
-    checks.push(
-      missing.length === 0
-        ? { check: "expect_tools", passed: true, message: `All ${contract.expect_tools.length} expected tools listed` }
-        : { check: "expect_tools", passed: false, message: `Missing tools: ${missing.join(", ")} (listed: ${[...names].join(", ") || "none"})` },
-    );
+    checks.push(compareListing("expect_tools", "tool", contract.expect_tools, tools.map((tool) => tool.name), contract.exact));
+  }
+
+  if (contract.expect_prompts) {
+    if (!ctx.client.getServerCapabilities()?.prompts) {
+      checks.push(capabilityMissing("expect_prompts", "prompts"));
+    } else {
+      const listed = await ctx.client.listPrompts();
+      checks.push(compareListing("expect_prompts", "prompt", contract.expect_prompts, listed.prompts.map((prompt) => prompt.name), contract.exact));
+    }
+  }
+
+  if (contract.expect_resources) {
+    if (!ctx.client.getServerCapabilities()?.resources) {
+      checks.push(capabilityMissing("expect_resources", "resources"));
+    } else {
+      const listed = await ctx.client.listResources();
+      checks.push(compareListing("expect_resources", "resource", contract.expect_resources, listed.resources.map((resource) => resource.uri), contract.exact));
+    }
   }
 
   if (contract.input_schema) {
