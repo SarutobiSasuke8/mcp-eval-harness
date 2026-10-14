@@ -17,18 +17,24 @@ It is not a hosted service, not an LLM-as-judge, not a replacement for each repo
 ## Quick start
 
 ```bash
-npm install
+npm ci
 npm run build
 node dist/src/cli.js examples/stub.suite.yaml
 ```
 
-The stub suite runs against the in-repo stub MCP (`examples/stub-mcp/`) and exits 0. Try breaking it: change a value in `fixtures/stub/get_listing.golden.json` and run again. The exit code becomes 1 and the output names the differing path.
+`npm ci` installs from the lockfile and runs `prepare` (`build:package`, which compiles `dist/src` only). `npm run build` then compiles `src`, `tests` and `examples`, which the stub suite needs: its stdio command is `node ../dist/examples/stub-mcp/server.js`, resolved from `examples/`. The command above exits 0. Try breaking it: change a value in `fixtures/stub/get_listing.golden.json` and run the `node` line again. The exit code becomes 1 and the output names the differing path.
+
+`npm run verify` is the same gate CI uses: build, lint, tests, then that stub suite end to end. From a clean checkout, `npm ci && npm run verify` is the copy-paste check.
 
 Until the package is on npm, other repos install it from git pinned to a commit SHA (see the rollout guide below) and call `mcp-eval suite.yaml` from an npm script.
 
 ```
 Usage: mcp-eval <suite.yaml|suite.json> [more suites...] [options]
 
+Runs contract checks and golden fixture compares against an MCP server and exits
+non-zero on any failure, so it can gate publish in CI or a local verify step.
+
+Options:
   --json               Print the full report as JSON instead of the human summary
   --update-goldens     Rewrite golden fixtures from the current results (explicit opt-in)
   --base-dir <dir>     Resolve fixture paths against this directory (default: suite file's directory)
@@ -36,8 +42,16 @@ Usage: mcp-eval <suite.yaml|suite.json> [more suites...] [options]
   --summary <file>     Append a Markdown summary to this file (for example $GITHUB_STEP_SUMMARY)
   --concurrency <n>    Run up to n suites at once, each with its own server process (default 1).
                        Output stays in the order the suites were given.
+  -h, --help           Show this help
+
+Exit codes (with several suites, the highest across them):
+  0  every contract passed
+  1  at least one contract failed
+  2  usage or configuration error (bad suite, unreachable or refused target,
+     connection timeout, HTTP 401 or other transport failure while connecting)
 ```
 
+`mcp-eval -h` prints that text. There are no other flags.
 ### Several suites and `--concurrency`
 
 Pass more than one suite to run them in one go, for example the portfolio sweep:
@@ -65,52 +79,97 @@ The same runner is exported for programmatic use as `runSuites(paths, { concurre
 
 ## Suite format
 
+The checked-in example is `examples/stub.suite.yaml`. It is what Quick start and `npm run verify` run. Paths below are relative to that file, not the repo root.
+
 ```yaml
+# Suite for the in-repo stub MCP. Fixture paths resolve relative to this file.
+# Run from the repo root after `npm run build`:
+#   node dist/src/cli.js examples/stub.suite.yaml
 version: 1
-name: jobscout-mcp
+name: stub-mcp
 target:
-  transport: stdio                      # or: transport: http, url: http://127.0.0.1:3000/mcp
-  command: ["node", "dist/index.js"]
-  # cwd, env (stdio) and headers (http) are optional
-timeout_ms: 30000
+  transport: stdio
+  command: ["node", "../dist/examples/stub-mcp/server.js"]
 contracts:
+  # exact: true also fails if the server lists a tool, prompt or resource the contract does not name.
   - name: tools_listed
     expect_tools: [search_jobs, get_listing]
-    exact: true                         # also fail on tools the contract does not name
+    exact: true
 
   - name: prompts_listed
     expect_prompts: [search_brief]
+    exact: true
 
   - name: resources_listed
     expect_resources: ["stub://listings/index"]
+    exact: true
 
   - name: search_jobs_input_schema
     input_schema:
-      search_jobs: fixtures/search_jobs.input.schema.json
+      search_jobs: ../fixtures/stub/search_jobs.input.schema.json
 
-  - name: search_jobs_schema
+  - name: search_jobs_schema_and_golden
     tool: search_jobs
     input: { query: "nurse dublin", limit: 5 }
     assert:
-      result_schema: fixtures/search_jobs.result.schema.json
+      result_schema: ../fixtures/stub/search_jobs.result.schema.json
       golden:
-        path: fixtures/search_jobs.golden.json
-        ignore_paths: [generated_at, "jobs[].posted_at"]
+        path: ../fixtures/stub/search_jobs.golden.json
+        ignore_paths: [generated_at]
 
+  - name: search_jobs_golden_subset
+    tool: search_jobs
+    input: { query: "typescript", limit: 10 }
+    assert:
+      golden:
+        path: ../fixtures/stub/search_jobs.subset.golden.json
+        only_paths: [total, "jobs[].id", "jobs[].title"]
+
+  - name: get_listing_golden
+    tool: get_listing
+    input: { id: job-004 }
+    assert:
+      golden: ../fixtures/stub/get_listing.golden.json
+
+  # SDK 2.x surfaces input validation failures as a tool result with isError: true,
+  # so the deny path is asserted on the result, not on a JSON-RPC error code.
   - name: deny_over_limit
     tool: search_jobs
     input: { query: "x", limit: 9999 }
     assert:
       is_error: true
-      error_message: "limit"
+      error_message: "limit.*(100|Too big)"
 
-  - name: unknown_tool
+  - name: unknown_listing_is_error
+    tool: get_listing
+    input: { id: job-999 }
+    assert:
+      is_error: true
+      error_message: "Listing not found: job-999"
+
+  # Protocol-level failures do arrive as JSON-RPC errors. Calling an unregistered tool is
+  # the SDK INVALID_PARAMS path and proves error_code assertions end to end.
+  - name: unknown_tool_is_invalid_params
     tool: not_a_tool
+    input: {}
     assert:
       error_code: INVALID_PARAMS
+      error_message: "not found"
 ```
 
-Fixture paths resolve relative to the suite file unless `--base-dir` is given. Stdio commands run with the suite file's directory as working directory unless `target.cwd` is set.
+Stub fixtures that suite references:
+
+| Fixture | Used by |
+| --- | --- |
+| `fixtures/stub/search_jobs.input.schema.json` | `search_jobs_input_schema` |
+| `fixtures/stub/search_jobs.result.schema.json` | `search_jobs_schema_and_golden` (`result_schema`) |
+| `fixtures/stub/search_jobs.golden.json` | `search_jobs_schema_and_golden` (`ignore_paths: [generated_at]`) |
+| `fixtures/stub/search_jobs.subset.golden.json` | `search_jobs_golden_subset` (`only_paths: [total, "jobs[].id", "jobs[].title"]`) |
+| `fixtures/stub/get_listing.golden.json` | `get_listing_golden` (string shorthand for `{ path }`) |
+
+`timeout_ms` is optional and defaults to `30000`. It applies to initialise and to every call. An HTTP target uses `transport: http`, `url` and optional `headers` (see Streamable HTTP targets below). A stdio target may also set `cwd` and `env`.
+
+Fixture paths resolve relative to the suite file unless `--base-dir` is given. The stdio working directory is `target.cwd` when that is set; otherwise it is the same directory fixture paths resolve against (the suite file's directory, or `--base-dir`).
 
 ### Contract types
 
@@ -149,9 +208,27 @@ Goldens are written only when you pass `--update-goldens`. Without the flag, a m
 
 ## JobScout example
 
-`examples/jobscout.suite.yaml` shows how JobScout plugs in: the exact tool list (six tools, `exact: true`), the two prompts (`jobscout_setup`, `jobscout_find_jobs`) under `expect_prompts`, the advertised `jobscout_search_jobs` input schema as a fixture, a golden for the deterministic `jobscout_classify_jobs` tool, a shape-only golden for `jobscout_list_sources` using `only_paths` (enabled state depends on environment keys and is excluded), and the over-limit deny path. `jobscout_search_jobs` contacts live job boards, so it never carries a golden.
+`examples/jobscout.suite.yaml` shows how JobScout plugs in. It is an example fixture, not part of `npm run verify`, because the stdio command points at a sibling checkout (`../../jobscout-mcp/dist/src/stdio.js`) that this repo does not build. In the JobScout repo itself the suite would live at `eval/jobscout.suite.yaml` with `command: ["node", "dist/src/stdio.js"]`.
 
-The suite points at a sibling checkout (`../../jobscout-mcp/dist/src/stdio.js`). In the JobScout repo itself it would live at `eval/jobscout.suite.yaml` with `command: ["node", "dist/src/stdio.js"]`.
+Contracts and fixtures, paths relative to the suite file:
+
+| Contract | What it asserts | Fixture |
+| --- | --- | --- |
+| `tools_listed` | Six tools, `exact: true`: `jobscout_list_sources`, `jobscout_search_jobs`, `jobscout_classify_jobs`, `jobscout_deduplicate`, `jobscout_source_yield`, `jobscout_briefing`. | |
+| `prompts_listed` | `jobscout_setup`, `jobscout_find_jobs`, `exact: true`. | |
+| `search_jobs_input_schema` | Advertised `jobscout_search_jobs` input schema. | `../fixtures/jobscout/search_jobs.input.schema.json` |
+| `classify_jobs_golden` | Deterministic `jobscout_classify_jobs` result schema and golden. | `../fixtures/jobscout/classify_jobs.result.schema.json`, `../fixtures/jobscout/classify_jobs.golden.json` |
+| `list_sources_shape` | Shape-only golden. `only_paths: ["sources[].id", "sources[].authentication"]` so enabled state (environment keys) is not compared. | `../fixtures/jobscout/list_sources.golden.json` |
+| `deny_over_limit` | `jobscout_search_jobs` with `limit: 9999` returns `is_error: true` and an error matching `limit`. | |
+| `unknown_tool_is_invalid_params` | `jobscout_not_a_tool` returns `error_code: INVALID_PARAMS`. | |
+
+There is no `expect_resources` contract. `jobscout_search_jobs` contacts live job boards, so it never carries a golden.
+
+From a sibling checkout (this repo and jobscout-mcp side by side, jobscout built):
+
+```bash
+node dist/src/cli.js examples/jobscout.suite.yaml
+```
 
 **Correction to the v0 drift note.** v0 reported that the JobScout `dist/` advertised six tools while `src/` defined eight. That was a false positive. `jobscout_setup` and `jobscout_find_jobs` are registered with `server.registerPrompt`, not as tools, and a fresh build of jobscout-mcp `main` lists exactly six tools and two prompts. The example suite had put the two prompt names under `expect_tools` because v0 could not assert prompts. With `expect_prompts` and `exact`, the suite now passes against a correct server and would fail on a real seventh tool.
 
@@ -166,7 +243,7 @@ target:
 timeout_ms: 5000                 # applies to initialise and to every call
 ```
 
-The SDK client negotiates JSON or SSE-framed responses and carries the `mcp-session-id` the server issues on every later request; stateless servers that issue none also work. `tests/http.test.ts` proves each of these against the in-repo HTTP stub (`examples/stub-mcp/http-server.ts`): JSON responses, SSE responses, session id carried after initialise, stateless mode, a bearer header from `target.headers`, a 401 when the header is missing (exit 2), a refused connection (exit 2) and a server that never answers (exit 2 within `timeout_ms`).
+The SDK client negotiates JSON or SSE-framed responses and carries the `mcp-session-id` the server issues on every later JSON-RPC request. The client's SSE listener is a GET, which can be recorded before initialise or without a session id (the stub answers 406); that GET is not part of the session-id check. Stateless servers that issue no session id also work. `tests/http.test.ts` proves each of these against the in-repo HTTP stub (`examples/stub-mcp/http-server.ts`): JSON responses, SSE responses, session id carried on JSON-RPC requests after initialise, stateless mode, a bearer header from `target.headers`, a 401 when the header is missing (exit 2), a refused connection (exit 2) and a server that never answers (exit 2 within `timeout_ms`).
 
 Header values in a committed suite are literal. Contract suites are offline (see the rollout rules), so only synthetic values belong there.
 
@@ -258,17 +335,17 @@ jobs:
           if-no-files-found: ignore
 ```
 
-Action inputs:
+Action inputs (names, defaults and descriptions from `action.yml`; there are no others):
 
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `suite` | (required) | Suite path, relative to `working-directory`. |
-| `working-directory` | `.` | Where `mcp-eval` runs (for a monorepo app, for example `apps/mcp`). |
-| `node-version` | `22` | Passed to `actions/setup-node`. Empty string skips setup-node. |
-| `args` | empty | Extra `mcp-eval` arguments, split on whitespace. |
-| `report-path` | `mcp-eval-report.json` | JSON report path, relative to `working-directory`. |
+| Input | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `suite` | yes | | Path to the suite file (YAML or JSON), relative to `working-directory`. |
+| `working-directory` | no | `.` | Directory `mcp-eval` runs in. Relative paths in the suite resolve from the suite file, not from here. |
+| `node-version` | no | `22` | Node.js version for `actions/setup-node`. Set to an empty string to skip setup-node and use the Node already on the runner (20 or newer). |
+| `args` | no | empty | Extra arguments for `mcp-eval`, split on whitespace (for example `--base-dir eval`). Do not pass `--update-goldens` in CI. |
+| `report-path` | no | `mcp-eval-report.json` | Where to write the JSON report, relative to `working-directory`. |
 
-Outputs: `exit-code` and `report-path`. The action checks out nothing itself and does not build your server; build it in an earlier step. It builds the harness from its own checkout, runs `mcp-eval --report <report-path> --summary $GITHUB_STEP_SUMMARY`, writes a Markdown table to the job summary (or an error block on exit 2), and fails the step on any non-zero exit.
+Outputs: `exit-code` (the `mcp-eval` exit code, 0, 1 or 2, from `steps.run.outputs.exit-code`) and `report-path` (always `inputs.report-path`). The report file is written only when the suite runs; exit 2 does not write it. The action checks out nothing itself and does not build your server; build it in an earlier step. It builds the harness from its own checkout (`npm ci` in the action directory, which runs `prepare`), runs `mcp-eval <suite> --report <report-path> --summary $GITHUB_STEP_SUMMARY` plus `args`, writes a Markdown table to the job summary (or an error block on exit 2), and fails the step on any non-zero exit.
 
 ### 6. Private repos (Actions billing-blocked)
 
@@ -345,11 +422,14 @@ tests/         node --test suites (compiled to dist/tests)
 ## Development
 
 ```bash
-npm run check      # typecheck, lint, build and test
-npm run eval:stub  # build and run the stub suite
+npm ci
+npm run verify        # build, lint, test, then examples/stub.suite.yaml end to end
+npm run check         # typecheck, lint, build and test
+npm run eval:stub     # build and run the stub suite
 npm run action:local  # run action.yml's steps locally with bash (pass, fail and exit 2 scenarios)
 ```
 
+CI (`.github/workflows/ci.yml`) runs `npm ci` and `npm run verify` on pull requests and on pushes to `main`.
 ## Licence
 
 MIT. See `LICENSE`.

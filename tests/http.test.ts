@@ -110,18 +110,23 @@ void describe("mcp-eval over Streamable HTTP", () => {
     });
   });
 
-  void it("carries the issued session id on every request after initialise", async () => {
+  // The pinned SDK client also opens an SSE listener with GET. That GET can be
+  // recorded before initialise, or without a session id (the stub answers 406).
+  // The contract under test is the JSON-RPC traffic: initialise carries no
+  // session id, and every later JSON-RPC request carries the id the server issued.
+  void it("carries the issued session id on every JSON-RPC request after initialise", async () => {
     await withStub({ response: "json", sessions: true }, async (stub) => {
       const file = await httpSuite(stub.url, LISTING_AND_CALL_CONTRACTS);
       const result = await mcpEval(file);
       assert.equal(result.code, 0, result.stderr || result.stdout);
       assert.equal(stub.issuedSessions.length, 1);
       const issued = stub.issuedSessions[0];
-      const [initialise, ...rest] = stub.requests;
-      assert.equal(initialise?.rpcMethod, "initialize");
-      assert.equal(initialise?.sessionId, undefined);
-      assert.ok(rest.length > 0);
-      for (const request of rest) {
+      const initialise = stub.requests.find((request) => request.rpcMethod === "initialize");
+      assert.ok(initialise, "expected an initialize request");
+      assert.equal(initialise.sessionId, undefined);
+      const laterRpc = stub.requests.filter((request) => request.rpcMethod !== undefined && request.rpcMethod !== "initialize");
+      assert.ok(laterRpc.length > 0);
+      for (const request of laterRpc) {
         assert.equal(request.sessionId, issued, `${request.method} ${request.rpcMethod ?? ""} carried ${request.sessionId}`);
       }
     });

@@ -46,6 +46,7 @@
     "lint": "eslint .",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "check": "npm run typecheck && npm run lint && npm test",
+    "verify": "npm run build && npm run lint && npm test && node dist/src/cli.js examples/stub.suite.yaml",
     "eval:stub": "npm run build && node dist/src/cli.js examples/stub.suite.yaml",
     "action:local": "npm run build && node scripts/exercise-action.mjs",
     "pack:check": "npm pack --dry-run"
