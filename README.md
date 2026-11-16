@@ -6,7 +6,7 @@ Shared evaluation harness for product MCPs: deterministic contract tests, golden
 
 `Workspace/Grok/Use Cases/MCP Eval Harness.md`
 
-in [SarutobiSasuke8/agentic-satellite-vault](https://github.com/SarutobiSasuke8/agentic-satellite-vault) (private).
+in the private Agentic Satellite Vault repository (not publicly accessible).
 
 ## What it is, and is not
 
